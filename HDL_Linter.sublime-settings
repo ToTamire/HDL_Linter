@@ -1,0 +1,6 @@
+{
+	// The minimum delay in seconds (fractional are okay) before a linter is run
+	"HDL_Linter_delay": 0.5,
+	// Directory with Vivado's xvlog
+	"HDL_Linter_xvlog_dir": "",
+}

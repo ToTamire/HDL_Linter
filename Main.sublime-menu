@@ -1,0 +1,36 @@
+[
+    {
+        "caption": "Preferences",
+        "id": "preferences",
+        "children":
+        [
+            {
+                "caption": "Package Settings",
+                "id": "package-settings",
+                "children":
+                [
+                    {
+                        "caption": "HDL_Linter",
+                        "children":
+                        [
+                            {
+                                "command": "open_file", "args":
+                                {
+                                    "file": "${packages}/HDL_Linter/HDL_Linter.sublime-settings"
+                                },
+                                "caption": "Settings – Default"
+                            },
+                            {
+                                "command": "open_file", "args":
+                                {
+                                    "file": "${packages}/User/HDL_Linter.sublime-settings"
+                                },
+                                "caption": "Settings – User"
+                            },
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+]
