@@ -88,6 +88,11 @@ class HDL_linter:
         view_size = view.size()  # get size of view
         sublime_region = sublime.Region(0, view_size)  # get region of view
         content = view.substr(sublime_region)  # get content of view
+        content = content.rstrip()  # remove ending whitespaces
+        if file['extension'] == 'vh':  # if file is verilog header
+            if content.find('//') > content.rfind('\n'):  # if file ends with single line comment
+                content = content[:content.find('//')]  # remove signle line comment
+            content = f"module HDL_Linter;\n{content} endmodule\n"  # set content inside pseudo module
         with open(f"{file['file_name']}.sublime-cache", 'w') as cache_file:  # create cache file
             cache_file.write(content)  # write content of view to cache file
         if os.path.isfile(f"{file['file_name']}.sublime-cache"):  # if file was successfuly created
@@ -116,7 +121,7 @@ class HDL_linter:
         process.append('--nolog')  # suppress log file generation
         process.append('--verbose')  # verbosity level for printing messages
         process.append('2')  # set to minimum
-        if file['extension'] in ['sv', 'svh', 'vh']:  # if file has System Verilog extension
+        if file['extension'] in ['sv', 'svh']:  # if file has System Verilog extension
             process.append('--sv')  # compile in System Verilog mode
         return subprocess.getoutput(process)  # return output
 
@@ -138,14 +143,22 @@ class HDL_linter:
             if len(match) == 1 and len(match[0]) == 9:  # if  found
                 file_name = match[0][7].rsplit(':', 1)  # split file to name and position
                 if len(file_name) == 2:  # if file has name and position
-                    pos = int(file_name[1].strip())
-                    file_name = file_name[0].strip()
+                    pos = int(file_name[1].strip())  # remove leading and trailing whitespaces
+                    file_name = file_name[0].strip()  # remove leading and trailing whitespaces
                     match = {  # make match handsome
                         'type': match[0][0].strip(),  # match type
                         'descr': match[0][5].strip(),  # match description
                         'file_name': file_name,  # file name with directory
                         'pos': pos,  # match position
                     }
+                    if top_file_name['extension'] == 'vh':  # if file is verilog header
+                        if match['pos'] == 1:  # if notification is in line with pseudo module keyword
+                            continue  # skip this notification
+                        if match['descr'].find('keyword endmodule') != -1:  # if notification is unexpected endmodule
+                            match['descr'] = 'unexpected EOF'  # change description to unexpected end of file
+                        if match['descr'].find('syntax error near \'endmodule\'') != -1:  # if other endmodule notification
+                            continue  # skip this notification
+                        match['pos'] -= 1  # substract position by pseudo module declaration in first line
                     if match['type'] == 'ERROR':  # if notification is error
                         pos = includes.get(file_name)  # get include position
                         if pos is not None:  # if match is in include file

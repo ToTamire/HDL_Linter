@@ -33,6 +33,3 @@ for example:
 }
 ```
 - Save settings file with ```CTRL``` + ```s```
-
-# Known issues:
-- Verilog header files (*.vh) are linted as SystemVerilog because of root scope declarations
