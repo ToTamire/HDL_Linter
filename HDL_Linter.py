@@ -93,7 +93,7 @@ class HDL_linter:
             if content.find('//') > content.rfind('\n'):  # if file ends with single line comment
                 content = content[:content.find('//')]  # remove signle line comment
             content = f"module HDL_Linter;\n{content} endmodule\n"  # set content inside pseudo module
-        with open(f"{file['file_name']}.sublime-cache", 'w') as cache_file:  # create cache file
+        with open(f"{file['file_name']}.sublime-cache", 'w', encoding='utf-8') as cache_file:  # create cache file
             cache_file.write(content)  # write content of view to cache file
         if os.path.isfile(f"{file['file_name']}.sublime-cache"):  # if file was successfuly created
             return True  # return true
@@ -138,7 +138,7 @@ class HDL_linter:
         lines = output.splitlines()  # split output it into lines
         for line in lines:  # for line in output lines
             match = re.findall(
-                '([A-Za-z0-9]+)(:)( \[)([^\]]+)(\] )([^\[]+)(\[)([^\]]+)(\])', line
+                '([A-Za-z0-9]+)(:)( \[)VRFC([^\]]+)(\] )([^\[]+)(\[)([^\]]+)(\])', line
             )  # match all notifications
             if len(match) == 1 and len(match[0]) == 9:  # if  found
                 file_name = match[0][7].rsplit(':', 1)  # split file to name and position
