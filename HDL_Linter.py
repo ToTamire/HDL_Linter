@@ -73,14 +73,13 @@ class HDL_linter:
         file_name = view.file_name()  # get name of modivied file
         if file_name is not None:  # check if file exist out of sublime
             file_name = file_name.replace('\\', '/')  # change path separator to Unix compliant
-            extension = file_name.rsplit('.', 1)  # split file name to name with directory and extension
-            if len(extension) == 2:  # if file has extension
-                extension = extension[1].lower()  # set extension to lowercase
-                if extension in ['v', 'vh', 'sv', 'svh']:  # if file has HDL extension
-                    return {  # return handsome file info
-                        'file_name': file_name,  # file name with directory
-                        'extension': extension,  # file extension
-                    }
+            extension = os.path.splitext(file_name)[1][1:]  # get extension
+            extension = extension.lower()  # set extension to lowercase
+            if extension in ['v', 'vh', 'sv', 'svh']:  # if file has HDL extension
+                return {  # return handsome file info
+                    'file_name': file_name,  # file name with directory
+                    'extension': extension,  # file extension
+                }
         return False  # if something goes wrong return false
 
     def create_cache_file(self, view, file):
