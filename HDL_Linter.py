@@ -89,8 +89,9 @@ class HDL_linter:
         content = view.substr(sublime_region)  # get content of view
         content = content.rstrip()  # remove ending whitespaces
         if file['extension'] == 'vh':  # if file is verilog header
-            if content.find('//') > content.rfind('\n'):  # if file ends with single line comment
-                content = content[:content.find('//')]  # remove signle line comment
+            while content.rfind('//') > content.rfind('\n'):  # while file ends with single line comment
+                content = content[:content.rfind('//')]  # remove signle line comment
+                content = content.rstrip()  # remove ending whitespaces
             content = f"module HDL_Linter;\n{content} endmodule\n"  # set content inside pseudo module
         with open(f"{file['file_name']}.sublime-cache", 'w', encoding='utf-8') as cache_file:  # create cache file
             cache_file.write(content)  # write content of view to cache file
