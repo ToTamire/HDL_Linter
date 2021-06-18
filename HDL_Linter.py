@@ -92,7 +92,7 @@ class HDL_linter:
             while content.rfind('//') > content.rfind('\n'):  # while file ends with single line comment
                 content = content[:content.rfind('//')]  # remove signle line comment
                 content = content.rstrip()  # remove ending whitespaces
-            content = f"module HDL_Linter;\n{content} endmodule\n"  # set content inside pseudo module
+            content = f"module HDL_Linter;\n{content}\nendmodule\n"  # set content inside pseudo module
         with open(f"{file['file_name']}.sublime-cache", 'w', encoding='utf-8') as cache_file:  # create cache file
             cache_file.write(content)  # write content of view to cache file
         if os.path.isfile(f"{file['file_name']}.sublime-cache"):  # if file was successfuly created
@@ -136,18 +136,18 @@ class HDL_linter:
         includes = {}  # create dict of includes
 
         lines = output.splitlines()  # split output it into lines
-        for line in lines:  # for line in output lines
-            match = re.findall(
-                '([A-Za-z0-9]+)(:)( \[)VRFC([^\]]+)(\] )([^\[]+)(\[)([^\]]+)(\])', line
-            )  # match all notifications
-            if len(match) == 1 and len(match[0]) == 9:  # if  found
-                file_name = match[0][7].rsplit(':', 1)  # split file to name and position
+        for line in lines:  # for each line in output lines
+            match = re.match(
+                '(INFO|WARNING|ERROR)(: \[VRFC[^\]]+\] )(.+)(\[)(.+)(\])', line
+            )  # match notifications
+            if match:  # if notification found
+                file_name = match.group(5).rsplit(':', 1)  # split file to name and position
                 if len(file_name) == 2:  # if file has name and position
                     pos = int(file_name[1].strip())  # remove leading and trailing whitespaces
                     file_name = file_name[0].strip()  # remove leading and trailing whitespaces
                     match = {  # make match handsome
-                        'type': match[0][0].strip(),  # match type
-                        'descr': match[0][5].strip(),  # match description
+                        'type': match.group(1).strip(),  # match type
+                        'descr': match.group(3).strip(),  # match description
                         'file_name': file_name,  # file name with directory
                         'pos': pos,  # match position
                     }
@@ -156,6 +156,7 @@ class HDL_linter:
                             continue  # skip this notification
                         if match['descr'].find('keyword endmodule') != -1:  # if notification is unexpected endmodule
                             match['descr'] = 'unexpected EOF'  # change description to unexpected end of file
+                            match['pos'] -= 1  # move unexpected end of file inside pseudo module
                         if match['descr'].find('syntax error near \'endmodule\'') != -1:  # if other endmodule notification
                             continue  # skip this notification
                         match['pos'] -= 1  # substract position by pseudo module declaration in first line
@@ -176,11 +177,11 @@ class HDL_linter:
                         else:
                             warnings[match['pos']] = match['descr']  # add new warning
                     if match['type'] == 'INFO':  # if notification is info
-                        match2 = re.findall(
+                        match2 = re.search(
                             '(Compiling verilog file \")([^\"]+)(\" included at line [0-9]+)', match['descr']
                         )  # match included file
-                        if len(match2) == 1 and len(match2[0]) == 3:  # if file is included
-                            file_name = match2[0][1]  # get file name from match
+                        if match2:  # if file is included
+                            file_name = match2.group(2)  # get file name from match
                             pos = includes.get(match['file_name'])  # get parent include position
                             if pos is not None:  # if parent is not top file
                                 includes[file_name] = pos  # set include position to parent include position
