@@ -16,244 +16,626 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.                                              #
 #######################################################################################################################
 
+import collections
+import datetime
+import os
+import re
+import shutil
 import sublime
 import sublime_plugin
-import datetime
 import subprocess
-import collections
-import re
-import os
+
+class SublimeModified(sublime_plugin.EventListener):
+
+    def on_modified_async(self, view):
+        '''Called after changes have been made to the view. Runs in a separate thread, and does not block the
+        application.
+
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        '''
+        # Update current status
+        HDL_linter.modified_time = datetime.datetime.now().timestamp()
+        HDL_linter.modified_view = view
+        # Get settings
+        settings.reload()
+        delay = settings.delay()
+        # Track modifications
+        sublime.set_timeout_async(HDL_linter.track_modifications, 1050 * delay)
+
+    def on_selection_modified_async(self, view):
+        '''Called after the selection has been modified in the view. Runs in a separate thread, and does not block the
+        application.
+
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        '''
+        # Find regions
+        found = False
+        view_id = view.id()
+        if view_id in HDL_linter.error_list or view_id in HDL_linter.warning_list:
+            selections = view.sel()
+            if len(selections) == 1:
+                selection = selections[0]
+                error_regions = view.get_regions('HDL_Linter_error')
+                warning_regions = view.get_regions('HDL_Linter_warning')
+                for key, region in enumerate(error_regions):
+                    if region.contains(selection):
+                        view.set_status(
+                            'hdl_status', HDL_linter.error_list[view_id][key]
+                        )
+                        found = True
+                for key, region in enumerate(warning_regions):
+                    if region.contains(selection):
+                        view.set_status(
+                            'hdl_status', HDL_linter.warning_list[view_id][key]
+                        )
+                        found = True
+        if not found:
+            view.erase_status('hdl_status')
 
 
 class HDL_linter:
-    ''' Verilog and SystemVerilog linting with Sublime Text 4 '''
+    '''Verilog and SystemVerilog linting with Sublime Text 4
+    '''
 
     def __init__(self):
-        ''' HDL_linter initialization '''
-        self.modified_time = datetime.datetime.now().timestamp()  # set time of last modification to current
-        self.compiled_time = datetime.datetime.now().timestamp()  # set time of last compilation to current
-        self.modified_view = None  # set last modified view to none
-
-        self.error_list = {}  # list of errors for each view
-        self.warning_list = {}  # list of warnings for each view
-
-        self.track_modifications()  # start tracking modifications
+        '''Initialization
+        '''
+        self.modified_time = datetime.datetime.now().timestamp()  # Time of last modification
+        self.compiled_time = datetime.datetime.now().timestamp()  # Time of last compilation
+        self.modified_view = None  # Tast modified view
+        self.error_list = {}  # List of errors for each view
+        self.warning_list = {}  # List of warnings for each view
 
     def track_modifications(self):
-        ''' track file modifications '''
-        if self.modified_time > self.compiled_time:  # if last modification of view occur after last compilation of view
-            now = datetime.datetime.now().timestamp()  # get current time
-            delay = self.get_delay()  # get delay from settings
-            if (now - self.modified_time) > delay:  # if user end modifications
+        '''Check if the content of the file has changed
+        '''
+        if self.modified_time > self.compiled_time:
+            now = datetime.datetime.now().timestamp()
+            # Get settings
+            settings.reload()
+            delay = settings.delay()
+            # Check changes
+            if (now - self.modified_time) > 0.95 * delay:
                 self.compiled_time = self.modified_time
-                view = self.modified_view  # get last modified view
-                if type(view) == sublime.View:  # if view is correct
-                    file = self.get_file(view)  # get file
-                    if file is not False:  # if file is correct
-                        cache_file = self.create_cache_file(view, file)  # create cache file
-                        if cache_file is not False:  # if cache file is correct
-                            output = self.get_xvlog_output(file)  # get output from xvlog
-                            self.remove_cache_file(file)  # remove cache file
-                            errors, warnings = self.parse_xvlog_output(view, output, file)  # parse output from xvlog
-                            self.print_selections(view, errors, warnings)  # print selections in modified view
-        sublime.set_timeout_async(self.track_modifications, 100)  # wait some time and repeat
+                view = self.modified_view
+                if type(view) == sublime.View:
+                    head, tail, ext = self.get_os_path(view)
+                    if ext in ['.v', '.vh', '.sv', '.svh']:
+                        self.init_linter(view, head, tail, ext)
+                        self.linter.prepare()
+                        output = self.linter.get_output()
+                        errors, warnings = self.linter.parse_output(output)
+                        self.linter.clean()
+                        self.update_selections(view, errors, warnings)
 
-    def get_delay(self):
-        ''' get linting delay '''
-        settings = sublime.load_settings('HDL_Linter.sublime-settings')  # get settings
-        delay = settings.get('HDL_Linter_delay')  # get user defined delay
-        if delay is None:  # if delay is not in settings
-            delay = 0.5  # set delay to default value
-        if (type(delay) != int and type(delay) != float) or delay < 0:  # if delay has wrong value
-            delay = 0.5  # set delay to default value
-        return delay  # return correct delay value
+    def get_os_path(self, view):
+        '''Returns some useful data on pathnames
 
-    def get_file(self, view):
-        ''' get file info '''
-        file_name = view.file_name()  # get name of modivied file
-        if file_name is not None:  # check if file exist out of sublime
-            file_name = file_name.replace('\\', '/')  # change path separator to Unix compliant
-            extension = os.path.splitext(file_name)[1][1:]  # get extension
-            extension = extension.lower()  # set extension to lowercase
-            if extension in ['v', 'vh', 'sv', 'svh']:  # if file has HDL extension
-                return {  # return handsome file info
-                    'file_name': file_name,  # file name with directory
-                    'extension': extension,  # file extension
-                }
-        return False  # if something goes wrong return false
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        :return (Everything leading up to last pathname component, Last pathname component, Extension)
+        :rtype: (str, str, str)
+        '''
+        head, tail, ext = ('', '', '')
+        file_name = view.file_name()
+        if file_name is not None:
+            ext = os.path.splitext(file_name)[1].lower()
+            head, tail = os.path.split(file_name)
+        return head, tail, ext
 
-    def create_cache_file(self, view, file):
-        ''' create chache file '''
-        view_size = view.size()  # get size of view
-        sublime_region = sublime.Region(0, view_size)  # get region of view
-        content = view.substr(sublime_region)  # get content of view
-        content = content.rstrip()  # remove ending whitespaces
-        if file['extension'] == 'vh':  # if file is verilog header
-            while content.rfind('//') > content.rfind('\n'):  # while file ends with single line comment
-                content = content[:content.rfind('//')]  # remove signle line comment
-                content = content.rstrip()  # remove ending whitespaces
-            content = f"module HDL_Linter;\n{content}\nendmodule\n"  # set content inside pseudo module
-        with open(f"{file['file_name']}.sublime-cache", 'w', encoding='utf-8') as cache_file:  # create cache file
-            cache_file.write(content)  # write content of view to cache file
-        if os.path.isfile(f"{file['file_name']}.sublime-cache"):  # if file was successfuly created
-            return True  # return true
-        return False  # if something goes wrong return false
+    def init_linter(self, view, head, tail, ext):
+        '''Initialize selected linter
 
-    def get_xvlog_dir(self):
-        ''' get xvlog dir from settings '''
-        settings = sublime.load_settings('HDL_Linter.sublime-settings')  # get settings
-        xvlog_dir = settings.get('HDL_Linter_xvlog_dir')  # get xvlog dir from settings
-        if xvlog_dir is None or type(xvlog_dir) != str or xvlog_dir == '':  # if xvlog directory has wrong value
-            return ''  # assume that folder containing xvlog is added to path
-        else:  # if xvlog dir is in settings
-            xvlog_dir = xvlog_dir.replace('\\', '/')  # change path separator to Unix compliant
-            if xvlog_dir[-1] == '/':  # if user dont end path with slash
-                xvlog_dir += '/'  # append slash
-            return xvlog_dir  # return xvlog directory
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        :param head: Everything leading up to last pathname component
+        :type head: str
+        :param tail: Last pathname component
+        :type tail: str
+        :param ext: Extension
+        :type ext: str
+        '''
+        # Get settings
+        if ext in ['.v', '.vh']:
+            linter = settings.verilog_linter()
+        if ext in ['.sv', '.svh']:
+            linter = settings.systemverilog_linter()
+        # Select linter
+        if linter == 'vivado':
+            self.linter = vivado(view, head, tail, ext)
+        if linter == 'questasim':
+            self.linter = questasim(view, head, tail, ext)
 
-    def get_xvlog_output(self, file):
-        ''' get output from xvlog '''
-        process = []  # create list of process parameters
-        xvlog_dir = self.get_xvlog_dir()  # get xvlog dir from settings
-        process.append(f"{xvlog_dir}xvlog")  # xvlog command
-        process.append(f"{file['file_name']}.sublime-cache")  # append cache file
-        process.append('--nosignalhandlers')  # necessary when 3rd party software causing a crash
-        process.append('--nolog')  # suppress log file generation
-        process.append('--verbose')  # verbosity level for printing messages
-        process.append('2')  # set to minimum
-        if file['extension'] in ['sv', 'svh']:  # if file has System Verilog extension
-            process.append('--sv')  # compile in System Verilog mode
-        return subprocess.getoutput(process)  # return output
-
-    def remove_cache_file(self, file):
-        ''' remove cache file '''
-        os.remove(f"{file['file_name']}.sublime-cache")  # remove cache file
-
-    def parse_xvlog_output(self, view, output, top_file_name):
-        ''' parse output from xvlog '''
-        errors = {}  # create dict of errors
-        warnings = {}  # create dict of warnings
-        includes = {}  # create dict of includes
-
-        lines = output.splitlines()  # split output it into lines
-        for line in lines:  # for each line in output lines
-            match = re.match(
-                '(INFO|WARNING|ERROR)(: \[VRFC[^\]]+\] )(.+)(\[)(.+)(\])', line
-            )  # match notifications
-            if match:  # if notification found
-                file_name = match.group(5).rsplit(':', 1)  # split file to name and position
-                if len(file_name) == 2:  # if file has name and position
-                    pos = int(file_name[1].strip())  # remove leading and trailing whitespaces
-                    file_name = file_name[0].strip()  # remove leading and trailing whitespaces
-                    match = {  # make match handsome
-                        'type': match.group(1).strip(),  # match type
-                        'descr': match.group(3).strip(),  # match description
-                        'file_name': file_name,  # file name with directory
-                        'pos': pos,  # match position
-                    }
-                    if top_file_name['extension'] == 'vh':  # if file is verilog header
-                        if match['pos'] == 1:  # if notification is in line with pseudo module keyword
-                            continue  # skip this notification
-                        if match['descr'].find('keyword endmodule') != -1:  # if notification is unexpected endmodule
-                            match['descr'] = 'unexpected EOF'  # change description to unexpected end of file
-                            match['pos'] -= 1  # move unexpected end of file inside pseudo module
-                        if match['descr'].find('syntax error near \'endmodule\'') != -1:  # if other endmodule notification
-                            continue  # skip this notification
-                        match['pos'] -= 1  # substract position by pseudo module declaration in first line
-                    if match['type'] == 'ERROR':  # if notification is error
-                        pos = includes.get(file_name)  # get include position
-                        if pos is not None:  # if match is in include file
-                            match['pos'] = pos  # change position to include position
-                        if match['pos'] in errors.keys():  # if there is already error with same position
-                            errors[match['pos']] += f" | {match['descr']}"  # add next error description
-                        else:
-                            errors[match['pos']] = match['descr']  # add new error
-                    if match['type'] == 'WARNING':  # if notification is warning
-                        pos = includes.get(file_name)  # get include position
-                        if pos is not None:  # if match is in include file
-                            match['pos'] = pos  # change position to include position
-                        if match['pos'] in warnings.keys():  # if there is already warning with same position
-                            warnings[match['pos']] += f" | {match['descr']}"  # add next warning description
-                        else:
-                            warnings[match['pos']] = match['descr']  # add new warning
-                    if match['type'] == 'INFO':  # if notification is info
-                        match2 = re.search(
-                            '(Compiling verilog file \")([^\"]+)(\" included at line [0-9]+)', match['descr']
-                        )  # match included file
-                        if match2:  # if file is included
-                            file_name = match2.group(2)  # get file name from match
-                            pos = includes.get(match['file_name'])  # get parent include position
-                            if pos is not None:  # if parent is not top file
-                                includes[file_name] = pos  # set include position to parent include position
-                            else:  # if parent is top file
-                                includes[file_name] = match['pos']  # set include position to match
-        return errors, warnings  # return parsed outptu from xvlog
-
-    def print_selections(self, view, errors, warnings):
-        ''' print selections in modified view '''
-        errors = collections.OrderedDict(sorted(errors.items()))  # sort errors by line
-        self.error_list[view.id()] = []  # erase list of old errors in modified view
-        for error_description in errors.values():  # for each error
-            self.error_list[view.id()].append(error_description)  # append error description to list of errors
-        error_positions = []  # list of error positions
-        for error_position in errors.keys():  # for each error
-            offset = view.text_point(error_position - 1, 0)  # convert row to buffer offset
-            error_position = view.line(offset)  # convert buffer offset to line region
-            error_positions.append(error_position)  # append error positon to error positions
-        view.erase_regions('HDL_Linter_error')  # erase old error regions from view
+    def update_selections(self, view, errors, warnings):
+        '''Update error regions and warning regions
+        '''
+        # Get error regions
+        errors = collections.OrderedDict(sorted(errors.items()))
+        self.error_list[view.id()] = []
+        for error_description in errors.values():
+            self.error_list[view.id()].append(error_description)
+        error_positions = []
+        for error_position in errors.keys():
+            offset = view.text_point(error_position - 1, 0)
+            error_position = view.line(offset)
+            error_positions.append(error_position)
+        # Erase old error regions
+        view.erase_regions('HDL_Linter_error')
+        # Add new error regions
         view.add_regions(
             'HDL_Linter_error', error_positions, 'region.redish', 'bookmark', sublime.DRAW_NO_FILL
-        )  # set all error regions to view
-        warnings = collections.OrderedDict(sorted(warnings.items()))  # sort warnings by line
-        self.warning_list[view.id()] = []  # erase list of warnings
-        for warning_description in warnings.values():  # for warning description in warnings
-            self.warning_list[view.id()].append(warning_description)  # append warning description to list of warnings
-        warning_positions = []  # list of warning positions
-        for warning_position in warnings.keys():  # for each warning
-            offset = view.text_point(warning_position - 1, 0)  # convert row to buffer offset
-            warning_position = view.line(offset)  # convert buffer offset to line region
-            warning_positions.append(warning_position)  # append warning positon to warning positions
-        view.erase_regions('HDL_Linter_warning')  # erase old warning regions from view
+        )
+        # Get warning regions
+        warnings = collections.OrderedDict(sorted(warnings.items()))
+        self.warning_list[view.id()] = []
+        for warning_description in warnings.values():
+            self.warning_list[view.id()].append(warning_description)
+        warning_positions = []
+        for warning_position in warnings.keys():
+            offset = view.text_point(warning_position - 1, 0)
+            warning_position = view.line(offset)
+            warning_positions.append(warning_position)
+        # Erase old warning regions
+        view.erase_regions('HDL_Linter_warning')
+        # Add new warning regions
         view.add_regions(
             'HDL_Linter_warning', warning_positions, 'region.yellowish', 'bookmark', sublime.DRAW_NO_FILL
-        )  # set all warning regions to view
-        SublimeModified.on_selection_modified_async(self, view)  # show notification description to current selection
+        )
+        # Show selected region
+        SublimeModified.on_selection_modified_async(self, view)
+
+class vivado:
+    '''Lint HDL with Xilinx Vivado'''
+
+    def __init__(self, view, head, tail, ext):
+        '''Initialization
+
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        :param head: Everything leading up to last pathname component
+        :type head: str
+        :param tail: Last pathname component
+        :type tail: str
+        :param ext: Extension
+        :type ext: str
+        '''
+        self.view = view  # Represents a view into a text buffer
+        self.head = head  # Everything leading up to last pathname component
+        self.tail = tail  # Last pathname component
+        self.ext = ext  # Extension
+        self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
+
+    def prepare(self):
+        '''Prepare view content
+        '''
+        # Get file content
+        sublime_region = sublime.Region(0, self.view.size())
+        content = self.view.substr(sublime_region).rstrip()
+        # Resolve issue with root scope declaration in verilog header file
+        if self.ext == '.vh':
+            while content.rfind('//') > content.rfind('\n'):
+                content = content[:content.rfind('//')].rstrip()
+            content = f"module HDL_Linter;\n{content}\nendmodule\n"
+        # Create cache file
+        try:
+            with open(self.cache_file_path, 'w', encoding='utf-8') as cache_file:
+                cache_file.write(content)
+        except OSError:
+            print(f"HDL_Linter: Can\'t create and open `{self.cache_file_path}` file.")
+
+    def get_output(self):
+        '''Compiles Verilog source code, SystemVerilog source code and returns output
+
+        :return Compilation output
+        :rtype: str
+        '''
+        cmd = self.get_xvlog_cmd()
+        exitcode, output = subprocess.getstatusoutput(cmd)
+        if exitcode:
+            print('HDL_Linter: Process `xvlog` returns a non-zero return code.')
+        return output
+
+    def get_xvlog_cmd(self):
+        '''Create xvlog command
+
+        :return xvlog command
+        :rtype: list of str
+        '''
+        # Get settings
+        vivado_bin_dir = settings.vivado_bin_dir()
+        # Create cmd
+        cmd = []
+        path = os.path.join(vivado_bin_dir, 'xvlog')
+        cmd.append(path)  # Vivado compiler
+        cmd.append(self.cache_file_path)  # Soruce file 
+        cmd.append('--nosignalhandlers')  # Run with no XSim specific signal handlers
+        cmd.append('--nolog')  # Suppress log file generation
+        cmd.append('--verbose')  # Specify verbosity level for printing messages
+        cmd.append('2')  # Low verbosity
+        # # Enable SystemVerilog features and keywords
+        if self.ext in ['.sv', '.svh']:
+            cmd.append('--sv')
+        return cmd
+
+    def parse_output(self, output):
+        '''Parse compilation output
+
+        :param output: Compilation output
+        :type output: str
+        :return Errors and warnings
+        :rtype: (list of errors, list of warnings)
+        '''
+        errors = {}  # Dictionary of errors
+        warnings = {}  # Dictionary of warnings
+        includes = {}  # Dictionary of includes
+
+        # Parse
+        lines = output.splitlines()
+        for line in lines:
+            msg = {}  # Message
+            # Find valid message
+            match = re.match(r'(\w+): \[VRFC \d+-\d+\]', line)
+            if match:
+                msg['level'] = match.group(1)
+                match_pos = len(match.group(0)) + 1
+                line = line[match_pos:]
+                match = re.match(r'\](\d+):([^\[])+\[', line[::-1])
+                if match:
+                    msg['file_line'] = int(match.group(1)[::-1])
+                    msg['file_name'] = match.group(2)[::-1]
+                    match_pos = len(match.group(0))
+                    line = line[:-match_pos]
+                    msg['content'] = line
+                    # Resolve issue with root scope declaration in verilog header file
+                    if self.ext == '.vh':
+                        if msg['file_line'] == 1:
+                            continue
+                        if msg['content'].find('keyword endmodule') != -1:
+                            msg['content'] = 'unexpected EOF'
+                            msg['file_line'] -= 1
+                        if msg['content'].find('syntax error near \'endmodule\'') != -1:
+                            continue
+                        msg['file_line'] -= 1
+                    # Handle error
+                    if msg['level'] == 'ERROR':
+                        pos = includes.get(msg['file_name'])
+                        if pos is not None:
+                            msg['file_line'] = pos
+                        if msg['file_line'] in errors.keys():
+                            errors[msg['file_line']] += f" | {msg['content']}"
+                        else:
+                            errors[msg['file_line']] = msg['content']
+                    # Handle warning
+                    if msg['level'] == 'WARNING':
+                        pos = includes.get(msg['file_name'])
+                        if pos is not None:
+                            msg['file_line'] = pos
+                        if msg['file_line'] in warnings.keys():
+                            warnings[msg['file_line']] += f" | {msg['content']}"
+                        else:
+                            warnings[msg['file_line']] = msg['content']
+                    # Handle include
+                    if msg['level'] == 'INFO':
+                        match = re.search(
+                            'Compiling verilog file \"([^\"]+)\" included at line [0-9]+', msg['content']
+                        )
+                        if match:
+                            file_name = match.group(1)
+                            pos = includes.get(msg['file_name'])
+                            if pos is not None:
+                                includes[file_name] = pos
+                            else:
+                                includes[file_name] = msg['file_line']
+        return errors, warnings
+
+    def clean(self):
+        '''Remove temporary files
+        '''
+        # Remove cache file
+        try:
+            os.remove(self.cache_file_path)
+        except OSError:
+            print(f"HDL_Linter: Can\'t remove `{self.cache_file_path}` file.")
+        # Remove compilation file
+        path = os.path.join(os.getcwd(), 'xvlog.pb')
+        try:
+            os.remove(path)
+        except OSError:
+            print(f"HDL_Linter: Can\'t remove `{path}` file.")
+        # Remove compilation library
+        path = os.path.join(os.getcwd(), 'xsim.dir')
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            print(f"HDL_Linter: Can\'t remove `{path}` directory.")
+
+class questasim:
+    '''Lint HDL with Intel Questasim'''
+
+    def __init__(self, view, head, tail, ext):
+        '''Initialization
+
+        :param view: Represents a view into a text buffer
+        :type view: sublime.View
+        :param head: Everything leading up to last pathname component
+        :type head: str
+        :param tail: Last pathname component
+        :type tail: str
+        :param ext: Extension
+        :type ext: str
+        '''
+        self.view = view  # Represents a view into a text buffer
+        self.head = head  # Everything leading up to last pathname component
+        self.tail = tail  # Last pathname component
+        self.ext = ext  # Extension
+        self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
+
+    def prepare(self):
+        '''Prepare view content
+        '''
+        # Get file content
+        sublime_region = sublime.Region(0, self.view.size())
+        content = self.view.substr(sublime_region).rstrip()
+        # Create library
+        cmd = self.get_vlib_cmd()
+        exitcode, output = subprocess.getstatusoutput(cmd)
+        if exitcode:
+            print('HDL_Linter: Process `vlib` returns a non-zero return code.')
+        # Create cache file
+        try:
+            with open(self.cache_file_path, 'w', encoding='utf-8') as cache_file:
+                cache_file.write(content)
+        except OSError:
+            print(f"HDL_Linter: Can\'t create and open `{self.cache_file_path}` file.")
+
+    def get_vlib_cmd(self):
+        '''Create vlib command
+
+        :return vlib command
+        :rtype: list of str
+        '''
+        # Get settings
+        questasim_bin_dir = settings.questasim_bin_dir()
+        # Create cmd
+        cmd = []
+        path = os.path.join(questasim_bin_dir, 'vlib')
+        cmd.append(path)  # Questasim library
+        cmd.append('-nocompress')  # Disable compression
+        cmd.append('work')  # Library name
+        return cmd
+
+    def get_output(self):
+        '''Compiles Verilog source code, SystemVerilog source code and returns output
+
+        :return Compilation output
+        :rtype: str
+        '''
+        cmd = self.get_vlog_cmd()
+        exitcode, output = subprocess.getstatusoutput(cmd)
+        if exitcode:
+            print('HDL_Linter: Process `vlog` returns a non-zero return code.')
+        return output
+
+    def get_vlog_cmd(self):
+        '''Create vlog command
+
+        :return vlog command
+        :rtype: list of str
+        '''
+        # Get settings
+        questasim_bin_dir = settings.questasim_bin_dir()
+        # Create cmd
+        cmd = []
+        path = os.path.join(questasim_bin_dir, 'vlog')
+        cmd.append(path)  # Questasim compiler
+        cmd.append(self.cache_file_path)  # Source file
+        cmd.append('-work')  # Specify work library
+        cmd.append('work')  # Library name
+        cmd.append('-O0')  # Perform lint-style check
+        cmd.append('-lint=full')  # Perform lint-style check
+        cmd.append('-pedanticerrors')  # Enforce strict language checks
+        cmd.append('-msgsingleline')  # Display the messages in a single line
+        # Enable SystemVerilog features and keywords
+        if self.ext in ['.sv', '.svh']:
+            cmd.append('-sv')
+        # Ensure compatibility with IEEE Std 1364
+        if self.ext in ['.v', '.vh']:
+            compatibility = settings.verilog_compatibility()
+            if compatibility == 2001:
+                cmd.append('-vlog01compat')
+            if compatibility == 1995:
+                cmd.append('-vlog95compat')
+        #  Ensure compatibility with IEEE Std 1800
+        if self.ext in ['.sv', '.svh']:
+            compatibility = settings.verilog_compatibility()
+            if compatibility == 2017:
+                cmd.append('-sv17compat')
+            if compatibility == 2012:
+                cmd.append('-sv12compat')
+            if compatibility == 2009:
+                cmd.append('-sv09compat')
+            if compatibility == 2005:
+                cmd.append('-sv05compat')
+        return cmd
+
+    def parse_output(self, output):
+        '''Parse compilation output
+
+        :param output: Compilation output
+        :type output: str
+        :return Errors and warnings
+        :rtype: (list of errors, list of warnings)
+        '''
+        errors = {}  # dict of errors
+        warnings = {}  # dict of warnings
+
+        lines = output.splitlines()
+        for line in lines:
+            msg = {}  # Message
+            # Find valid message
+            match = re.match(r'\*\* ([\w]+):', line)
+            if match:
+                msg['level'] = match.group(1)
+                match_pos = len(match.group(0)) + 1
+                line = line[match_pos:]
+                match = re.match(r'\([^\)]+\)', line)
+                if match:
+                    match_pos = len(match.group(0)) + 1
+                    line = line[match_pos:]
+                match = re.match(r'([^\(]+)\((\d+)\):', line)
+                if not match:
+                    match = re.match(r'\*\* while parsing .* at ([^\(]+)\((\d+)\).+\):', line)
+                if match:
+                    msg['file_name'] = match.group(1)
+                    msg['file_line'] = int(match.group(2))
+                    match_pos = len(match.group(0)) + 1
+                    line = line[match_pos:]
+                    match = re.match(r'\([^\)]+\)', line)
+                    if match:
+                        match_pos = len(match.group(0)) + 1
+                        line = line[match_pos:]
+                    msg['content'] = line
+                    # Handle error
+                    if msg['level'] == 'Error':
+                        if msg['file_line'] in errors.keys():
+                            errors[msg['file_line']] += f" | {msg['content']}"
+                        else:
+                            errors[msg['file_line']] = msg['content']
+                    # Handle warning
+                    if msg['level'] == 'Warning':
+                        if msg['file_line'] in warnings.keys():
+                            warnings[msg['file_line']] += f" | {msg['content']}"
+                        else:
+                            warnings[msg['file_line']] = msg['content']
+        return errors, warnings
+
+    def clean(self):
+        '''Remove temporary files
+        '''
+        # Remove cache file
+        try:
+            os.remove(self.cache_file_path)
+        except OSError:
+            print(f"HDL_Linter: Can\'t remove `{self.cache_file_path}` file.")
+        # Remove compilation library
+        path = os.path.join(os.getcwd(), 'work')
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            print(f"HDL_Linter: Can\'t remove `{path}` directory.")
 
 
-class SublimeModified(sublime_plugin.EventListener):  # check if file is modified
+class HDL_Linter_settings:
+    '''Handle HDL_Linter settings
+    '''
 
-    def on_modified_async(self, view):  # when user modified view
-        global HDL_linter
+    def __init__(self):
+        '''Load settings from file
+        '''
+        self.settings = sublime.load_settings('HDL_Linter.sublime-settings')
 
-        HDL_linter.modified_time = datetime.datetime.now().timestamp()  # set last modified time to current
-        HDL_linter.modified_view = view  # set last modified view to current
+    def reload(self):
+        '''Reload settings from file
+        '''
+        self.settings = sublime.load_settings('HDL_Linter.sublime-settings')
 
-    def on_selection_modified_async(self, view):  # when user modified selection
-        global HDL_linter
+    def delay(self):
+        '''Minimum delay in seconds before linter run
+        '''
+        # Get setting
+        setting = self.settings.get('delay')
+        # Possible values: int, float
+        if type(setting) == float or type(setting) == int:
+            return setting
+        # Default value: 0.5
+        setting = 0.5
+        print(f"HDL_Linter: `delay` changed to default value `{setting}`")
+        return setting
 
-        found = False  # error or warning in selection not found
-        view_id = view.id()  # get view id of modified selection
-        # view_id = str(view_id)  # convert view id to str
-        if view_id in HDL_linter.error_list or view_id in HDL_linter.warning_list:  # if view in list of errors or warnings
-            selections = view.sel()  # get current selections
-            if len(selections) == 1:  # if only one selection
-                selection = selections[0]  # convert list of selections to selection
-                error_regions = view.get_regions('HDL_Linter_error')  # get all error regions
-                warning_regions = view.get_regions('HDL_Linter_warning')  # get all warning regions
-                for key, region in enumerate(error_regions):  # for region in list of error regions
-                    if region.contains(selection):  # if selection in region
-                        view.set_status(
-                            'hdl_status', HDL_linter.error_list[view_id][key]
-                        )  # set error description to status bar
-                        found = True  # error in selection found
-                for key, region in enumerate(warning_regions):  # for region in list of warning regions
-                    if region.contains(selection):  # if selection in region
-                        view.set_status(
-                            'hdl_status', HDL_linter.warning_list[view_id][key]
-                        )  # set warning description to status bar
-                        found = True  # warning in selection found
-        if not found:  # if error or warning in selection not found
-            view.erase_status('hdl_status')  # erase status bar
+    def verilog_linter(self):
+        '''Software used to lint Verilog files
+        '''
+        # Get setting
+        setting = self.settings.get('verilog_linter')
+        # Possible values: {"vivado", "questasim"}
+        if type(setting) == str:
+            setting = setting.lower()
+            if setting in ['vivado', 'questasim']:
+                return setting
+        # Default value: "vivado"
+        setting = 'vivado'
+        print(f"HDL_Linter: `verilog_linter` changed to default value `{setting}`")
+        return setting
+
+    def systemverilog_linter(self):
+        '''Software used to lint SystemVerilog files
+        '''
+        # Get setting
+        setting = self.settings.get('systemverilog_linter')
+        # Possible values: {"vivado", "questasim"}
+        if type(setting) == str:
+            setting = setting.lower()
+            if setting in ['vivado', 'questasim']:
+                return setting
+        # Default value: "vivado"
+        setting = 'vivado'
+        print(f"HDL_Linter: `systemverilog_linter` changed to default value `{setting}`")
+        return setting
+
+    def vivado_bin_dir(self):
+        '''Directory with Vivado's xvlog (when not added to path)
+        '''
+        # Get setting
+        setting = self.settings.get('vivado_bin_dir')
+        # Possible values: "<path>"
+        if type(setting) == str:
+            return setting
+        # Default value: ""
+        setting = ''
+        return setting
+
+    def questasim_bin_dir(self):
+        '''Directory with Questasim's vlog (when not added to path)
+        '''
+        # Get setting
+        setting = self.settings.get('questasim_bin_dir')
+        # Possible values: "<path>"
+        if type(setting) == str:
+            return setting
+        # Default value: ""
+        setting = ''
+        return setting
+
+    def verilog_compatibility(self):
+        '''Ensure compatibility with IEEE Std 1364
+        '''
+        # Get setting
+        setting = self.settings.get('verilog_compatibility')
+        # Possible values: {1995, 2001, 2005}
+        if type(setting) == int:
+            if setting in [1995, 2001, 2005]:
+                return setting
+        # Default value: 2005
+        setting = 2005
+        print(f"HDL_Linter: `verilog_compatibility` changed to default value `{setting}`")
+        return setting
+
+    def systemverilog_compatibility(self):
+        '''Ensure compatibility with IEEE Std 1800
+        '''
+        # Get setting
+        setting = self.settings.get('systemverilog_compatibility')
+        # Possible values: {2005, 2009, 2012, 2017}
+        if type(setting) == int:
+            if setting in [2005, 2009, 2012, 2017]:
+                return setting
+        # Default value: 2005
+        setting = 2017
+        print(f"HDL_Linter: `systemverilog_compatibility` changed to default value `{setting}`")
+        return setting
 
 
-HDL_linter = HDL_linter()  # Initialize HDL_linter
+settings = HDL_Linter_settings()
+HDL_linter = HDL_linter()

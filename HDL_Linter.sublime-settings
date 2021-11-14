@@ -1,6 +1,38 @@
 {
-	// The minimum delay in seconds (fractional are okay) before a linter is run
-	"HDL_Linter_delay": 0.5,
-	// Directory with Vivado's xvlog
-	"HDL_Linter_xvlog_dir": "",
+    // Minimum delay in seconds before linter run
+    // Possible values: int, float
+    // Default value: 0.5
+    "delay": 0.5,
+
+    // Software used to lint Verilog files
+    // Possible values: {"vivado", "questasim"}
+    // Default value: "vivado"
+    "verilog_linter": "vivado",
+
+    // Software used to lint SystemVerilog files
+    // Possible values: {"vivado", "questasim"}
+    // Default value: "vivado"
+    "systemverilog_linter": "vivado",
+
+    // Directory with Vivado's xvlog (when not added to path)
+    // Possible values: "<path>"
+    // Example value: "C:/Xilinx/Vivado/2019.1/bin/"
+    // Default value: ""
+    "vivado_bin_dir": "",
+
+    // Directory with Questasim's vlog (when not added to path)
+    // Possible values: "<path>"
+    // Example value: "C:/intelFPGA_pro/21.3/questa_fe/win64/"
+    // Default value: ""
+    "questasim_bin_dir": "",
+
+    // Ensure compatibility with IEEE Std 1364
+    // Possible values: {1995, 2001, 2005}
+    // Default value: 2005
+    "verilog_compatibility": 2005,
+
+    // Ensure compatibility with IEEE Std 1800
+    // Possible values: {2005, 2009, 2012, 2017}
+    // Default value: 2005
+    "systemverilog_compatibility": 2017,
 }
