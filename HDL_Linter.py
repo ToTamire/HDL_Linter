@@ -206,6 +206,7 @@ class vivado:
         self.tail = tail  # Last pathname component
         self.ext = ext  # Extension
         self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
+        self.work_path = os.path.join(sublime.cache_path(), 'HDL_Linter')  # Library pathname
 
     def prepare(self):
         '''Prepare view content
@@ -249,7 +250,10 @@ class vivado:
         cmd = []
         path = os.path.join(vivado_bin_dir, 'xvlog')
         cmd.append(path)  # Vivado compiler
-        cmd.append(self.cache_file_path)  # Soruce file 
+        cmd.append(self.cache_file_path)  # Soruce file
+        path = os.path.join(self.work_path, 'xsim.dir')
+        cmd.append('--work')  # Specify work library
+        cmd.append(f"work={path}")  # Library name and directory
         cmd.append('--nosignalhandlers')  # Run with no XSim specific signal handlers
         cmd.append('--nolog')  # Suppress log file generation
         cmd.append('--verbose')  # Specify verbosity level for printing messages
@@ -345,7 +349,7 @@ class vivado:
         except OSError:
             print(f"HDL_Linter: Can\'t remove `{path}` file.")
         # Remove compilation library
-        path = os.path.join(os.getcwd(), 'xsim.dir')
+        path = os.path.join(self.work_path, 'xsim.dir')
         try:
             shutil.rmtree(path)
         except OSError:
@@ -371,6 +375,7 @@ class questasim:
         self.tail = tail  # Last pathname component
         self.ext = ext  # Extension
         self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
+        self.work_path = os.path.join(sublime.cache_path(), 'HDL_Linter')  # Library pathname
 
     def prepare(self):
         '''Prepare view content
@@ -403,7 +408,8 @@ class questasim:
         path = os.path.join(questasim_bin_dir, 'vlib')
         cmd.append(path)  # Questasim library
         cmd.append('-nocompress')  # Disable compression
-        cmd.append('work')  # Library name
+        path = os.path.join(self.work_path, 'work')
+        cmd.append(path)  # Library name and directory
         return cmd
 
     def get_output(self):
@@ -431,8 +437,9 @@ class questasim:
         path = os.path.join(questasim_bin_dir, 'vlog')
         cmd.append(path)  # Questasim compiler
         cmd.append(self.cache_file_path)  # Source file
+        path = os.path.join(self.work_path, 'work')
         cmd.append('-work')  # Specify work library
-        cmd.append('work')  # Library name
+        cmd.append(path)  # Library name and directory
         cmd.append('-O0')  # Perform lint-style check
         cmd.append('-lint=full')  # Perform lint-style check
         cmd.append('-pedanticerrors')  # Enforce strict language checks
@@ -520,7 +527,7 @@ class questasim:
         except OSError:
             print(f"HDL_Linter: Can\'t remove `{self.cache_file_path}` file.")
         # Remove compilation library
-        path = os.path.join(os.getcwd(), 'work')
+        path = os.path.join(self.work_path, 'work')
         try:
             shutil.rmtree(path)
         except OSError:
