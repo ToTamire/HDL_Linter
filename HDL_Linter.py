@@ -207,6 +207,8 @@ class vivado:
         self.ext = ext  # Extension
         self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
         self.work_path = os.path.join(sublime.cache_path(), 'HDL_Linter')  # Library pathname
+        if not os.path.isdir(self.work_path):
+            os.makedirs(self.work_path)
 
     def prepare(self):
         '''Prepare view content
@@ -376,6 +378,8 @@ class questasim:
         self.ext = ext  # Extension
         self.cache_file_path = f"{os.path.join(self.head, self.tail)}.sublime-cache"  # Cache file pathname
         self.work_path = os.path.join(sublime.cache_path(), 'HDL_Linter')  # Library pathname
+        if not os.path.isdir(self.work_path):
+            os.makedirs(self.work_path)
 
     def prepare(self):
         '''Prepare view content
