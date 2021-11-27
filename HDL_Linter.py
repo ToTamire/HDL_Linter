@@ -38,7 +38,7 @@ class SublimeModified(sublime_plugin.EventListener):
         HDL_linter.modified_time = datetime.datetime.now().timestamp()
         HDL_linter.modified_view = view
         # Get settings
-        settings.reload()
+        settings.reload(view)
         delay = settings.delay()
         # Track modifications
         sublime.set_timeout_async(HDL_linter.track_modifications, 1050 * delay)
@@ -93,13 +93,12 @@ class HDL_linter:
         '''
         if self.modified_time > self.compiled_time:
             now = datetime.datetime.now().timestamp()
+            view = self.modified_view
             # Get settings
-            settings.reload()
             delay = settings.delay()
             # Check changes
             if (now - self.modified_time) > 0.95 * delay:
                 self.compiled_time = self.modified_time
-                view = self.modified_view
                 if type(view) == sublime.View:
                     head, tail, ext = self.get_os_path(view)
                     if ext in ['.v', '.vh', '.sv', '.svh']:
@@ -543,14 +542,25 @@ class HDL_Linter_settings:
     '''
 
     def __init__(self):
-        '''Load settings from file
+        '''Settings initialization
         '''
-        self.settings = sublime.load_settings('HDL_Linter.sublime-settings')
+        self.settings = {}
 
-    def reload(self):
+    def reload(self, view):
         '''Reload settings from file
         '''
+        # Reload user settings
         self.settings = sublime.load_settings('HDL_Linter.sublime-settings')
+        self.settings = self.settings.to_dict()
+        # Reload project settings
+        project_data = view.window().project_data()
+        if project_data is not None and type(project_data) == dict:
+            settings = project_data.get('settings')
+            if settings is not None and type(settings) == dict:
+                for key, value in settings.items():
+                    if key.startswith('HDL_Linter_'):
+                        key = key[11:]
+                        self.settings[key] = value
 
     def delay(self):
         '''Minimum delay in seconds before linter run
