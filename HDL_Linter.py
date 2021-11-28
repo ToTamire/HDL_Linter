@@ -247,6 +247,7 @@ class vivado:
         '''
         # Get settings
         vivado_bin_dir = settings.vivado_bin_dir()
+        incdirs = settings.incdirs()
         # Create cmd
         cmd = []
         path = os.path.join(vivado_bin_dir, 'xvlog')
@@ -259,9 +260,13 @@ class vivado:
         cmd.append('--nolog')  # Suppress log file generation
         cmd.append('--verbose')  # Specify verbosity level for printing messages
         cmd.append('2')  # Low verbosity
-        # # Enable SystemVerilog features and keywords
+        # Enable SystemVerilog features and keywords
         if self.ext in ['.sv', '.svh']:
             cmd.append('--sv')
+        # Specify directories to be searched for files included using Verilog `include
+        for incdir in incdirs:
+            cmd.append('--include')
+            cmd.append(incdir)
         return cmd
 
     def parse_output(self, output):
@@ -435,6 +440,7 @@ class questasim:
         '''
         # Get settings
         questasim_bin_dir = settings.questasim_bin_dir()
+        incdirs = settings.incdirs()
         # Create cmd
         cmd = []
         path = os.path.join(questasim_bin_dir, 'vlog')
@@ -468,6 +474,9 @@ class questasim:
                 cmd.append('-sv09compat')
             if compatibility == 2005:
                 cmd.append('-sv05compat')
+        # Specify directories to be searched for files included using Verilog `include
+        for incdir in incdirs:
+            cmd.append(f"+incdir+{incdir}")
         return cmd
 
     def parse_output(self, output):
@@ -560,7 +569,10 @@ class HDL_Linter_settings:
                 for key, value in settings.items():
                     if key.startswith('HDL_Linter_'):
                         key = key[11:]
-                        self.settings[key] = value
+                        if type(self.settings.get(key)) == list:
+                            self.settings[key] += value
+                        else:
+                            self.settings[key] = value
 
     def delay(self):
         '''Minimum delay in seconds before linter run
@@ -655,6 +667,24 @@ class HDL_Linter_settings:
         # Default value: 2005
         setting = 2017
         print(f"HDL_Linter: `systemverilog_compatibility` changed to default value `{setting}`")
+        return setting
+
+    def incdirs(self):
+        '''Specify directories to be searched for files included using Verilog `include
+        '''
+        # Get setting
+        setting = self.settings.get('incdirs')
+        # Possible values: list of "<path>"
+        if type(setting) == list:
+            copy = setting[:]
+            for path in reversed(copy):
+                if type(path) != str or not os.path.isdir(path):
+                    print(f"HDL_Linter: path `{path}` removed from `incdirs`")
+                    setting.remove(path)
+            return setting
+        # Default value: []
+        setting = []
+        print(f"HDL_Linter: `incdirs` changed to default value `[]`")
         return setting
 
 
